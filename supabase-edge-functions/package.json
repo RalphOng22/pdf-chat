@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "node tests/test-functions.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "node-fetch": "^3.3.2"
+  }
+}
