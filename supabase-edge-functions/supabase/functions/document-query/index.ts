@@ -158,7 +158,7 @@ serve(async (req) => {
     const { data: similarChunks, error: searchError } = await supabase.rpc(
       'match_chunks_with_metadata',
       {
-        query_embedding: queryEmbeddingValues,
+        query_embedding: `[${queryEmbeddingValues.join(',')}]`, // Format as string array
         match_threshold: 0.7,
         match_count: 5,
         document_filter: documentsFilter,
@@ -168,8 +168,12 @@ serve(async (req) => {
     );
 
 
-    console.log('Query params:', {
-      query_embedding: queryEmbeddingValues.length,
+    // After generating the query embedding
+    console.log('Query embedding length:', queryEmbeddingValues.length);
+
+    // Before the similarity search
+    console.log('Running similarity search with params:', {
+      query_embedding: `${queryEmbeddingValues.length} dimensions`,
       match_threshold: 0.7,
       match_count: 5,
       document_filter: documentsFilter,
@@ -178,7 +182,8 @@ serve(async (req) => {
     });
 
     if (searchError) {
-      throw new Error('Failed to perform similarity search');
+      console.error('Search error details:', searchError);
+      throw searchError;
     }
 
     // Handle case when no similar chunks are found
@@ -274,6 +279,9 @@ Instructions:
     );
 
   } catch (error) {
+    console.error('Detailed error:', error);
+    if (error.message) console.error('Error message:', error.message);
+    if (error.cause) console.error('Error cause:', error.cause);
     return new Response(
       JSON.stringify({ 
         error: error.message,
