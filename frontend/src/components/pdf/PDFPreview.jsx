@@ -13,7 +13,8 @@ const PDFPreview = ({ document, isSelected, onSelect, onView }) => {
               onChange={onSelect}
               className="rounded border-gray-300"
             />
-            <h3 className="font-medium text-gray-800 truncate">{document.name}</h3>
+            {/* <h3 className="font-medium text-gray-800 truncate">{document.name}</h3> */}
+            <span className="block truncate max-w-[200px]">{document.name}</span>
           </div>
           <button
             onClick={onView}

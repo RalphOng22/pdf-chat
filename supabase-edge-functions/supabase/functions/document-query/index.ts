@@ -159,7 +159,7 @@ serve(async (req) => {
       'match_chunks_with_metadata',
       {
         query_embedding: `[${queryEmbeddingValues.join(',')}]`, // Format as string array
-        match_threshold: 0.7,
+        match_threshold: 0.2,
         match_count: 5,
         document_filter: documentsFilter,
         p_size: pagination.pageSize,
