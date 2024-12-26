@@ -1,2 +1,5 @@
 
 /backend/venv
+/backend/app/models/__pycache__
+backend/tests/.DS_Store
+backend/tests/.DS_Store
