@@ -22,7 +22,7 @@ class SupabaseService:
                 'upload_date': 'NOW()',
                 'processing_status': 'processing'
             }
-            result = await self.client.table('documents').insert(data).execute()
+            result = self.client.table('documents').insert(data).execute()
             return result.data[0]
         except Exception as e:
             logger.error(f"Error storing document: {str(e)}")
@@ -31,7 +31,7 @@ class SupabaseService:
     async def update_document(self, document_id: int, updates: Dict):
         """Update document metadata"""
         try:
-            await self.client.table('documents')\
+            self.client.table('documents')\
                 .update(updates)\
                 .eq('id', document_id)\
                 .execute()
@@ -43,7 +43,7 @@ class SupabaseService:
         """Store document chunks with embeddings"""
         try:
             if chunks:
-                result = await self.client.table('chunks').insert(chunks).execute()
+                result = self.client.table('chunks').insert(chunks).execute()
                 return result.data
             return []
         except Exception as e:
@@ -68,7 +68,7 @@ class SupabaseService:
             if document_ids:
                 params['filter_document_ids'] = document_ids
             
-            result = await self.client.rpc('match_documents', params).execute()
+            result = self.client.rpc('match_documents', params).execute()
             return result.data
         except Exception as e:
             logger.error(f"Error finding similar chunks: {str(e)}")
@@ -84,7 +84,7 @@ class SupabaseService:
                 'source_references': source_references,
                 'timestamp': 'NOW()'
             }
-            result = await self.client.table('queries').insert(data).execute()
+            result = self.client.table('queries').insert(data).execute()
             return result.data[0]
         except Exception as e:
             logger.error(f"Error storing query: {str(e)}")
@@ -93,7 +93,7 @@ class SupabaseService:
     async def get_document_metadata(self, document_id: int) -> Dict:
         """Get document metadata"""
         try:
-            result = await self.client.table('documents')\
+            result = self.client.table('documents')\
                 .select('*')\
                 .eq('id', document_id)\
                 .single()\
@@ -106,7 +106,7 @@ class SupabaseService:
     async def get_chat_documents(self, chat_id: str) -> List[Dict]:
         """Get all documents for a chat"""
         try:
-            result = await self.client.table('documents')\
+            result = self.client.table('documents')\
                 .select('*')\
                 .eq('chat_id', chat_id)\
                 .execute()

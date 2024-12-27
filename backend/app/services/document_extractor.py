@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 class DocumentExtractor:
     def __init__(self):
         self.client = UnstructuredClient(
-            api_key=settings.UNSTRUCTURED_API_KEY,
-            api_url=settings.UNSTRUCTURED_API_URL
+            api_key_auth=settings.UNSTRUCTURED_API_KEY,
+            server_url=settings.UNSTRUCTURED_API_URL
         )
 
     async def process_file(self, file: UploadFile) -> Dict:

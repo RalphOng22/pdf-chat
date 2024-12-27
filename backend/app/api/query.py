@@ -1,7 +1,7 @@
-# app/api/query.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List
 from ..services.service_integrator import ServiceIntegrator
+from app.config import settings
 from ..models.schemas import QueryRequest, QueryResponse
 import logging
 
@@ -15,8 +15,7 @@ async def query_documents(request: QueryRequest):
     Query processed documents and get relevant responses
     """
     try:
-        service = ServiceIntegrator()
-        
+        service = ServiceIntegrator(settings)
         result = await service.query_documents(
             query=request.query,
             chat_id=request.chat_id,
@@ -25,7 +24,7 @@ async def query_documents(request: QueryRequest):
         
         return QueryResponse(
             response=result['response'],
-            sources=result['sources']
+            source_references=result['source_references']
         )
         
     except Exception as e:

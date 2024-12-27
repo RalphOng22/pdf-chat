@@ -1,33 +1,29 @@
 import google.generativeai as genai
 import logging
 from ..config import Settings
-from typing import List, Dict, Any
-
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-
 
 class GeminiService:
     def __init__(self, settings: Settings):
         genai.configure(api_key=settings.GOOGLE_API_KEY)
-        self.model = genai.GenerativeModel('gemini-pro')
-        self.embedding_model = genai.GenerativeModel('text-embedding-004')
 
-    async def generate_embedding(self, text: str) -> List[float]:
+    def generate_embedding(self, text: str) -> List[float]:
         """Generate embeddings for text"""
         try:
-            result = await self.embedding_model.embed_content(text)
-            if not result or not hasattr(result, 'embedding'):
+            result = genai.embed_content(model="models/text-embedding-004", content=text)
+            if not result or 'embedding' not in result:
                 raise ValueError("Failed to generate embedding")
-            return result.embedding.values
+            return result['embedding']['values']
         except Exception as e:
             logger.error(f"Error generating embedding: {str(e)}")
             raise
 
-    async def generate_response(
+    def generate_response(
         self,
         query: str,
-        source_references: List[Dict]  # Changed from List[SourceReference]
+        source_references: List[Dict]
     ) -> str:
         """Generate a response using the provided source references"""
         try:
@@ -35,13 +31,7 @@ class GeminiService:
             context_parts = []
             for ref in source_references:
                 source = f"From {ref['document_name']} (Page {ref['page_number']}):"
-                if ref['chunk_type'] == "table":
-                    # Format table data
-                    table_data = ref.get('table_data', {})
-                    context_parts.append(f"{source}\n{ref['text']}")
-                else:
-                    # Format text content
-                    context_parts.append(f"{source}\n{ref['text']}")
+                context_parts.append(f"{source}\n{ref['text']}")
 
             context = "\n\n".join(context_parts)
 
@@ -53,9 +43,8 @@ class GeminiService:
 
             Question: {query}"""
 
-            result = await self.model.generate_content(prompt)
-            return result.text
-
+            result = genai.generate_text(prompt=prompt)
+            return result.result
         except Exception as e:
             logger.error(f"Error generating response: {str(e)}")
             raise

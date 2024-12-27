@@ -10,10 +10,12 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 class ServiceIntegrator:
-    def __init__(self):
-        self.gemini = GeminiService()
-        self.supabase = SupabaseService()
-        self.document_extractor = DocumentExtractor()
+    def __init__(self, settings):
+        self.gemini = GeminiService(settings)  # Pass settings explicitly
+        self.supabase = SupabaseService()      
+        self.document_extractor = DocumentExtractor()  
+
+
         
     async def process_document(self, file: UploadFile, chat_id: str) -> Dict:
         """Process single document end-to-end"""
@@ -149,7 +151,7 @@ class ServiceIntegrator:
             
             return {
                 'response': response,
-                'sources': chunks
+                'source_references': chunks
             }
             
         except Exception as e:

@@ -1,11 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
-import { GoogleGenerativeAI } from "npm:@google/generative-ai"
 import { corsHeaders } from '../shared/cors.ts'
 
-interface TitleRequest {
+interface ChatQueryRequest {
   chatId: string;
-  firstMessage: string;
+  query: string;
+  documentIds?: number[]; // Optional: to filter specific documents
 }
 
 serve(async (req: Request) => {
@@ -47,9 +47,9 @@ serve(async (req: Request) => {
     }
 
     // Get request body
-    const { chatId, firstMessage }: TitleRequest = await req.json()
+    const { chatId, query, documentIds }: ChatQueryRequest = await req.json()
 
-    if (!chatId || !firstMessage) {
+    if (!chatId || !query) {
       throw new Error('Missing required parameters')
     }
 
@@ -65,27 +65,45 @@ serve(async (req: Request) => {
       throw new Error('Chat not found or unauthorized')
     }
 
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(Deno.env.get("GOOGLE_API_KEY")!)
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" })
+    // If documentIds provided, verify they belong to this chat
+    if (documentIds?.length) {
+      const { count, error: docsError } = await supabaseClient
+        .from('documents')
+        .select('id', { count: 'exact' })
+        .eq('chat_id', chatId)
+        .in('id', documentIds)
 
-    // Generate title
-    const prompt = `Based on this first message or question from a chat conversation, generate a short, concise, and contextual title (maximum 6 words). First message: "${firstMessage}"`
-    const result = await model.generateContent(prompt)
-    const title = result.response.text().trim()
-
-    // Update chat title
-    const { error: updateError } = await supabaseClient
-      .from('chats')
-      .update({ title })
-      .eq('id', chatId)
-
-    if (updateError) {
-      throw new Error('Failed to update chat title')
+      if (docsError || count !== documentIds.length) {
+        throw new Error('One or more documents not found or unauthorized')
+      }
     }
 
+    // Forward query to FastAPI backend
+    const response = await fetch(
+      `${Deno.env.get('BACKEND_URL')}api/v1/query`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          query,
+          document_ids: documentIds
+        })
+      }
+    )
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to process query')
+    }
+
+    const result = await response.json()
+
     return new Response(
-      JSON.stringify({ title }),
+      JSON.stringify(result),
       {
         headers: {
           ...corsHeaders,

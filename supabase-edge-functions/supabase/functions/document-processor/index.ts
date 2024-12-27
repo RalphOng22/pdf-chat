@@ -1,11 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
-import { GoogleGenerativeAI } from "npm:@google/generative-ai"
 import { corsHeaders } from '../shared/cors.ts'
 
-interface TitleRequest {
+interface ProcessDocumentsRequest {
   chatId: string;
-  firstMessage: string;
+  documentIds: number[];
 }
 
 serve(async (req: Request) => {
@@ -47,9 +46,9 @@ serve(async (req: Request) => {
     }
 
     // Get request body
-    const { chatId, firstMessage }: TitleRequest = await req.json()
+    const { chatId, documentIds }: ProcessDocumentsRequest = await req.json()
 
-    if (!chatId || !firstMessage) {
+    if (!chatId || !documentIds?.length) {
       throw new Error('Missing required parameters')
     }
 
@@ -65,27 +64,53 @@ serve(async (req: Request) => {
       throw new Error('Chat not found or unauthorized')
     }
 
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(Deno.env.get("GOOGLE_API_KEY")!)
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" })
+    // Verify documents exist and belong to the chat
+    const { data: documents, error: docsError } = await supabaseClient
+      .from('documents')
+      .select('id, file_path')
+      .eq('chat_id', chatId)
+      .in('id', documentIds)
 
-    // Generate title
-    const prompt = `Based on this first message or question from a chat conversation, generate a short, concise, and contextual title (maximum 6 words). First message: "${firstMessage}"`
-    const result = await model.generateContent(prompt)
-    const title = result.response.text().trim()
+    if (docsError || !documents || documents.length !== documentIds.length) {
+      throw new Error('One or more documents not found')
+    }
 
-    // Update chat title
-    const { error: updateError } = await supabaseClient
-      .from('chats')
-      .update({ title })
-      .eq('id', chatId)
+    // Update documents status to processing
+    await supabaseClient
+      .from('documents')
+      .update({ processing_status: 'processing' })
+      .in('id', documentIds)
 
-    if (updateError) {
-      throw new Error('Failed to update chat title')
+    // Call FastAPI backend to start processing
+    const response = await fetch(
+      `${Deno.env.get('BACKEND_URL')}/api/v1/documents/process`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${Deno.env.get('BACKEND_API_KEY')}`,
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          documents: documents.map(doc => ({
+            id: doc.id,
+            file_path: doc.file_path
+          }))
+        })
+      }
+    )
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to start document processing')
     }
 
     return new Response(
-      JSON.stringify({ title }),
+      JSON.stringify({
+        message: 'Document processing started',
+        chatId,
+        documentIds
+      }),
       {
         headers: {
           ...corsHeaders,

@@ -15,3 +15,5 @@ pydantic-settings
 pytest 
 pytest-asyncio 
 pytest-cov
+httpx
+pytest-mock
