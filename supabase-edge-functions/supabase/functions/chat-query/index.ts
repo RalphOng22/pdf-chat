@@ -2,10 +2,29 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
 import { corsHeaders } from '../shared/cors.ts'
 
-interface ChatQueryRequest {
+interface QueryRequest {
   chatId: string;
   query: string;
-  documentIds?: number[]; // Optional: to filter specific documents
+  documentIds?: number[];
+}
+
+interface SourceReference {
+  document_id: number;
+  document_name: string;
+  page_number: number;
+  chunk_type: 'text' | 'table';
+  text: string;
+  table_data?: {
+    headers: string[];
+    data: Record<string, string>[];
+    html?: string;
+  };
+  similarity: number;
+}
+
+interface QueryResponse {
+  response: string;
+  source_references: SourceReference[];
 }
 
 serve(async (req: Request) => {
@@ -14,73 +33,46 @@ serve(async (req: Request) => {
   }
 
   try {
-    if (req.method !== 'POST') {
-      throw new Error('Method not allowed')
-    }
-
-    // Get and verify auth header
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      throw new Error('No authorization header')
-    }
+    if (!authHeader) throw new Error('No authorization header')
 
-    // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
-      }
+      { auth: { autoRefreshToken: false, persistSession: false } }
     )
 
-    // Verify user token
-    const {
-      data: { user },
-      error: verificationError,
-    } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
+    const { data: { user }, error: verificationError } = 
+      await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
+    if (verificationError || !user) throw new Error('Invalid token')
 
-    if (verificationError || !user) {
-      throw new Error('Invalid token')
-    }
+    const { chatId, query, documentIds }: QueryRequest = await req.json()
+    if (!chatId || !query) throw new Error('Missing required parameters')
 
-    // Get request body
-    const { chatId, query, documentIds }: ChatQueryRequest = await req.json()
-
-    if (!chatId || !query) {
-      throw new Error('Missing required parameters')
-    }
-
-    // Verify chat belongs to user
+    // Verify chat ownership
     const { data: chat, error: chatError } = await supabaseClient
       .from('chats')
       .select('id')
       .eq('id', chatId)
       .eq('user_id', user.id)
       .single()
+    if (chatError || !chat) throw new Error('Chat not found or unauthorized')
 
-    if (chatError || !chat) {
-      throw new Error('Chat not found or unauthorized')
-    }
-
-    // If documentIds provided, verify they belong to this chat
+    // Verify documents if specified
     if (documentIds?.length) {
       const { count, error: docsError } = await supabaseClient
         .from('documents')
         .select('id', { count: 'exact' })
         .eq('chat_id', chatId)
         .in('id', documentIds)
-
       if (docsError || count !== documentIds.length) {
         throw new Error('One or more documents not found or unauthorized')
       }
     }
 
-    // Forward query to FastAPI backend
+    // Call backend API
     const response = await fetch(
-      `${Deno.env.get('BACKEND_URL')}api/v1/query`,
+      `${Deno.env.get('BACKEND_URL')}/api/v1/query`,
       {
         method: 'POST',
         headers: {
@@ -100,29 +92,20 @@ serve(async (req: Request) => {
       throw new Error(error.detail || 'Failed to process query')
     }
 
-    const result = await response.json()
-
+    const result: QueryResponse = await response.json()
     return new Response(
       JSON.stringify(result),
       {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json',
-        },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
       }
     )
 
-  } catch (error:any) {
+  } catch (error: any) {
     return new Response(
-      JSON.stringify({
-        error: error.message
-      }),
+      JSON.stringify({ error: error.message }),
       {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json',
-        },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: error.message === 'Invalid token' ? 401 : 400,
       }
     )

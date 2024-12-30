@@ -9,7 +9,7 @@ class SupabaseService:
     def __init__(self):
         self.client = create_client(
             settings.SUPABASE_URL,
-            settings.SUPABASE_KEY
+            settings.SUPABASE_SERVICE_KEY
         )
 
     async def store_document(self, metadata: Dict) -> Dict:

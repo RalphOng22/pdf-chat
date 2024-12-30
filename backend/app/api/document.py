@@ -1,37 +1,36 @@
-# app/api/document.py
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from typing import List
+from fastapi import APIRouter, UploadFile, HTTPException
+from pydantic import BaseModel
+from ..services.service_integrator import ServiceIntegrator
 from app.config import settings
-from app.services.service_integrator import ServiceIntegrator
-from ..models.schemas import ProcessingResponse
+from typing import List
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+class DocumentRequest(BaseModel):
+    id: int
+    file_path: str
+
+class ProcessDocumentsRequest(BaseModel):
+    chat_id: str
+    documents: List[DocumentRequest]
+
 @router.post("/process")
-async def process_documents(
-    files: List[UploadFile] = File(...),
-    chat_id: str = None
-):
-    """Process one or more PDF documents and store their content"""
+async def process_documents(request: ProcessDocumentsRequest):
+    """Process documents using their file paths"""
     try:
-        # Validate file types first
-        for file in files:
-            if not file.filename.endswith('.pdf'):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File {file.filename} is not a PDF"
-                )
-        
+        logger.info(f"Processing request: {request}")
         service = ServiceIntegrator(settings)
-        results = await service.process_documents(files, chat_id)
+        
+        results = await service.process_documents(
+            chat_id=request.chat_id,
+            documents=[{"id": doc.id, "file_path": doc.file_path} for doc in request.documents]
+        )
+        
         return results
         
-    except HTTPException as he:
-        # Re-raise HTTP exceptions directly
-        raise he
     except Exception as e:
         logger.error(f"Error processing documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

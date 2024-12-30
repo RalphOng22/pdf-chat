@@ -3,125 +3,159 @@ from fastapi import UploadFile
 from .document_extractor import DocumentExtractor 
 from .gemini_service import GeminiService
 from .supabase_service import SupabaseService
-from ..config import settings
+from ..config import Settings
 import logging
 import asyncio
+import httpx
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 class ServiceIntegrator:
-    def __init__(self, settings):
-        self.gemini = GeminiService(settings)  # Pass settings explicitly
-        self.supabase = SupabaseService()      
-        self.document_extractor = DocumentExtractor()  
-
-
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.gemini = GeminiService(settings)
+        self.supabase = SupabaseService()
+        self.document_extractor = DocumentExtractor(settings)
         
-    async def process_document(self, file: UploadFile, chat_id: str) -> Dict:
-        """Process single document end-to-end"""
+    async def download_file(self, file_path: str) -> UploadFile:
+        """Download file from Supabase storage"""
         try:
-            # Store document metadata
-            document = await self.supabase.store_document({
-                'chat_id': chat_id,
-                'name': file.filename,
+            storage_path = file_path
+            logger.info(f"Getting signed URL for: {storage_path}")
+            
+            # Get signed URL
+            result = self.supabase.client.storage \
+                .from_('pdfs') \
+                .create_signed_url(storage_path, 60)
+
+            if 'signedURL' not in result:
+                raise ValueError(f"Invalid signed URL response: {result}")
+
+            # Download file using signed URL
+            async with httpx.AsyncClient() as client:
+                response = await client.get(result['signedURL'])
+                response.raise_for_status()
+                
+                return UploadFile(
+                    filename=storage_path.split('/')[-1],
+                    file=BytesIO(response.content)
+                )
+                    
+        except Exception as e:
+            logger.error(f"Error downloading file {file_path}: {str(e)}")
+            raise
+
+    async def process_document(self, doc_id: int, file_path: str, chat_id: str) -> Dict:
+        """Process single document from storage path"""
+        logger.info(f"Processing document {doc_id} from chat {chat_id}")
+        try:
+            # Update initial status
+            await self.supabase.update_document(doc_id, {
                 'processing_status': 'processing'
             })
             
-            # Extract content using unstructured.io
-            extracted_content = await self.document_extractor.process_file(file)
-            
-            # Process tables and text chunks
-            chunks = []
-            chunk_index = 0
-            
-            # Process tables
-            for table in extracted_content['tables']:
-                embedding = await self.gemini.generate_embedding(str(table['text']))
-                chunks.append({
-                    'document_id': document['id'],
-                    'chunk_index': chunk_index,
-                    'chunk_type': 'table',
-                    'text': table['text'],
-                    'page_number': table['page_number'],
-                    'table_data': table['data'],
-                    'embedding': embedding
+            try:
+                # Download file using our download_file method that uses signed URLs
+                file = await self.download_file(file_path)
+                
+                # Extract content
+                extracted_content = await self.document_extractor.process_file(file)
+                
+                # Process chunks and generate embeddings
+                chunks = []
+                chunk_index = 0
+                
+                # Process tables
+                for table in extracted_content.get('tables', []):
+                    embedding = await self.gemini.generate_embedding(str(table['text']))
+                    chunks.append({
+                        'document_id': doc_id,
+                        'chunk_index': chunk_index,
+                        'chunk_type': 'table',
+                        'text': table['text'],
+                        'page_number': table['page_number'],
+                        'table_data': table['data'],
+                        'embedding': embedding
+                    })
+                    chunk_index += 1
+                
+                # Process text chunks
+                for text_chunk in extracted_content.get('text_chunks', []):
+                    embedding = await self.gemini.generate_embedding(text_chunk['text'])
+                    chunks.append({
+                        'document_id': doc_id,
+                        'chunk_index': chunk_index,
+                        'chunk_type': 'text',
+                        'text': text_chunk['text'],
+                        'page_number': text_chunk['page_number'],
+                        'table_data': None,
+                        'embedding': embedding
+                    })
+                    chunk_index += 1
+
+                # Store chunks with chat_id context
+                if chunks:
+                    logger.info(f"Storing {len(chunks)} chunks for document {doc_id} in chat {chat_id}")
+                    await self.supabase.store_chunks(chunks)
+
+                # Update document metadata
+                await self.supabase.update_document(doc_id, {
+                    'chat_id': chat_id,
+                    'page_count': extracted_content['metadata']['total_pages'],
+                    'processing_status': 'completed'
                 })
-                chunk_index += 1
-            
-            # Process text chunks
-            for text_chunk in extracted_content['text_chunks']:
-                embedding = await self.gemini.generate_embedding(text_chunk['text'])
-                chunks.append({
-                    'document_id': document['id'],
-                    'chunk_index': chunk_index,
-                    'chunk_type': 'text',
-                    'text': text_chunk['text'],
-                    'page_number': text_chunk['page_number'],
-                    'table_data': None,
-                    'embedding': embedding
-                })
-                chunk_index += 1
 
-            # Store all chunks
-            if chunks:
-                await self.supabase.store_chunks(chunks)
-
-            # Update document metadata
-            await self.supabase.update_document(document['id'], {
-                'page_count': extracted_content['metadata']['total_pages'],
-                'processing_status': 'completed'
-            })
-
-            return {
-                'document_id': document['id'],
-                'chunks_processed': len(chunks),
-                'page_count': extracted_content['metadata']['total_pages'],
-                'status': 'success'
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in document processing: {str(e)}")
-            if 'document' in locals():
-                await self.supabase.update_document(document['id'], {
+                return {
+                    'document_id': doc_id,
+                    'chat_id': chat_id,
+                    'chunks_processed': len(chunks),
+                    'page_count': extracted_content['metadata']['total_pages'],
+                    'status': 'success'
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing document {doc_id} in chat {chat_id}: {str(e)}")
+                await self.supabase.update_document(doc_id, {
                     'processing_status': 'failed'
                 })
+                raise
+
+        except Exception as e:
+            logger.error(f"Error in document processing for chat {chat_id}: {str(e)}")
             raise
 
-    async def process_documents(self, files: List[UploadFile], chat_id: str) -> List[Dict]:
+    async def process_documents(self, chat_id: str, documents: List[Dict]) -> List[Dict]:
         """Process multiple documents with controlled concurrency"""
         semaphore = asyncio.Semaphore(3)  # Process up to 3 files simultaneously
         
-        async def process_with_semaphore(file):
+        async def process_with_semaphore(doc):
             async with semaphore:
-                return await self.process_document(file, chat_id)
+                try:
+                    return await self.process_document(
+                        doc_id=doc['id'],
+                        file_path=doc['file_path'],
+                        chat_id=chat_id
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing document {doc['id']}: {str(e)}")
+                    return {
+                        'document_id': doc['id'],
+                        'status': 'error',
+                        'error': str(e)
+                    }
 
         try:
-            tasks = [process_with_semaphore(file) for file in files]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            processed_results = []
-            for file, result in zip(files, results):
-                if isinstance(result, Exception):
-                    processed_results.append({
-                        'filename': file.filename,
-                        'status': 'error',
-                        'error': str(result)
-                    })
-                else:
-                    processed_results.append({
-                        'filename': file.filename,
-                        'status': 'success',
-                        **result
-                    })
-            
-            return processed_results
+            tasks = [process_with_semaphore(doc) for doc in documents]
+            results = await asyncio.gather(*tasks)
+            return results
             
         except Exception as e:
             logger.error(f"Error in batch processing: {str(e)}")
             raise
 
     async def query_documents(
-        self, 
+        self,
         query: str,
         chat_id: str,
         document_ids: Optional[List[int]] = None

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     # Supabase Configuration
     SUPABASE_URL: str
     SUPABASE_KEY: str
+    SUPABASE_SERVICE_KEY: str
     
     # Google API Configuration
     GOOGLE_API_KEY: str

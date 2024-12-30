@@ -4,3 +4,6 @@
 backend/tests/.DS_Store
 backend/tests/.DS_Store
 .DS_Store
+backend/.env
+/backend/app/api/__pycache__
+.DS_Store

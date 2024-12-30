@@ -2,9 +2,14 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
 import { corsHeaders } from '../shared/cors.ts'
 
-interface ProcessDocumentsRequest {
-  chatId: string;
-  documentIds: number[];
+interface Document {
+  id: number;
+  file_path: string;
+}
+
+interface ProcessRequest {
+  chat_id: string;
+  documents: Document[];
 }
 
 serve(async (req: Request) => {
@@ -17,13 +22,11 @@ serve(async (req: Request) => {
       throw new Error('Method not allowed')
     }
 
-    // Get and verify auth header
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       throw new Error('No authorization header')
     }
 
-    // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
@@ -35,60 +38,88 @@ serve(async (req: Request) => {
       }
     )
 
-    // Verify user token
-    const {
-      data: { user },
-      error: verificationError,
-    } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
-
+    const { data: { user }, error: verificationError } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
     if (verificationError || !user) {
       throw new Error('Invalid token')
     }
 
-    // Get request body
-    const { chatId, documentIds }: ProcessDocumentsRequest = await req.json()
+    const { chatId, documentIds } = await req.json()
+    
+    console.log('Processing request:', { chatId, documentIds })
 
-    if (!chatId || !documentIds?.length) {
-      throw new Error('Missing required parameters')
+    if (!chatId || typeof chatId !== 'string') {
+      throw new Error('Invalid chatId format')
     }
 
-    // Verify chat belongs to user
-    const { data: chat, error: chatError } = await supabaseClient
-      .from('chats')
-      .select('id')
-      .eq('id', chatId)
-      .eq('user_id', user.id)
-      .single()
-
-    if (chatError || !chat) {
-      throw new Error('Chat not found or unauthorized')
+    if (!Array.isArray(documentIds) || !documentIds.every(id => typeof id === 'number')) {
+      throw new Error('Invalid documentIds format')
     }
 
-    // Verify documents exist and belong to the chat
+    // Check if documents are already being processed
+    const { data: existingDocs, error: checkError } = await supabaseClient
+      .from('documents')
+      .select('id, processing_status')
+      .in('id', documentIds)
+      .eq('chat_id', chatId)
+
+    if (checkError) {
+      throw new Error('Failed to check document status')
+    }
+
+    // Filter out documents that are already being processed
+    const docsToProcess = existingDocs?.filter(doc => 
+      doc.processing_status !== 'processing' && 
+      doc.processing_status !== 'completed'
+    ) ?? []
+
+    if (docsToProcess.length === 0) {
+      return new Response(
+        JSON.stringify({
+          message: 'All documents are already processed or being processed',
+          chatId,
+          documentIds
+        }),
+        {
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+          status: 200,
+        }
+      )
+    }
+
+    const documentsToProcess = docsToProcess.map(doc => doc.id)
+
+    // Get documents info
     const { data: documents, error: docsError } = await supabaseClient
       .from('documents')
       .select('id, file_path')
       .eq('chat_id', chatId)
-      .in('id', documentIds)
+      .in('id', documentsToProcess)
 
-    if (docsError || !documents || documents.length !== documentIds.length) {
-      throw new Error('One or more documents not found')
+    if (docsError || !documents) {
+      throw new Error('Failed to fetch document information')
     }
 
-    // Update documents status to processing
-    await supabaseClient
+    // Update status to processing
+    const { error: updateError } = await supabaseClient
       .from('documents')
       .update({ processing_status: 'processing' })
-      .in('id', documentIds)
+      .in('id', documentsToProcess)
 
-    // Call FastAPI backend to start processing
+    if (updateError) {
+      throw new Error('Failed to update document status')
+    }
+
+    // Call FastAPI backend with authentication
     const response = await fetch(
       `${Deno.env.get('BACKEND_URL')}/api/v1/documents/process`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${Deno.env.get('BACKEND_API_KEY')}`,
+          'Authorization': authHeader  // Forward the auth token
         },
         body: JSON.stringify({
           chat_id: chatId,
@@ -101,15 +132,25 @@ serve(async (req: Request) => {
     )
 
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to start document processing')
+      // If backend fails, revert processing status
+      await supabaseClient
+        .from('documents')
+        .update({ processing_status: 'pending' })
+        .in('id', documentsToProcess)
+
+      const errorText = await response.text()
+      console.error('Backend error:', errorText)
+      throw new Error(`Backend request failed: ${response.status} ${response.statusText} - ${errorText}`)
     }
+
+    const result = await response.json()
 
     return new Response(
       JSON.stringify({
         message: 'Document processing started',
         chatId,
-        documentIds
+        documentIds: documentsToProcess,
+        result
       }),
       {
         headers: {
@@ -120,11 +161,10 @@ serve(async (req: Request) => {
       }
     )
 
-  } catch (error:any) {
+  } catch (error: any) {
+    console.error('Processing error:', error)
     return new Response(
-      JSON.stringify({
-        error: error.message
-      }),
+      JSON.stringify({ error: error.message }),
       {
         headers: {
           ...corsHeaders,

@@ -31,35 +31,33 @@ serve(async (req: Request) => {
       }
     )
 
-    const {
-      data: { user },
-      error: verificationError,
-    } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
-
+    const { data: { user }, error: verificationError } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
     if (verificationError || !user) {
       throw new Error('Invalid token')
     }
 
     const formData = await req.formData()
+    const chatId = formData.get('chatId')
     const filesData = formData.getAll('files')
+
+    if (!chatId) {
+      throw new Error('Chat ID is required')
+    }
 
     if (filesData.length === 0) {
       throw new Error('No files provided')
     }
 
-    // Type guard function to check if value is a File
     const isFile = (value: FormDataEntryValue): value is File => {
       return value instanceof File
     }
 
-    // Filter and validate files
     const files = filesData.filter(isFile)
-
     if (files.length === 0) {
       throw new Error('No valid files provided')
     }
 
-    // Validate files are PDFs and within size limit
+    // Validate files
     for (const file of files) {
       if (!file.name.toLowerCase().endsWith('.pdf')) {
         throw new Error(`Invalid file type for ${file.name}. Only PDFs are allowed.`)
@@ -70,75 +68,79 @@ serve(async (req: Request) => {
       }
     }
 
-    // Create new chat
+    // Verify chat
     const { data: chat, error: chatError } = await supabaseClient
       .from('chats')
-      .insert([
-        {
-          user_id: user.id,
-          title: files.length === 1 ? files[0].name : 'Multiple PDFs Chat',
-          created_at: new Date().toISOString(),
-        },
-      ])
-      .select()
+      .select('id')
+      .eq('id', chatId)
+      .eq('user_id', user.id)
       .single()
 
-    if (chatError) {
-      throw chatError
+    if (chatError || !chat) {
+      throw new Error('Chat not found or unauthorized')
     }
 
-    // Upload files and create document records
-    const results = await Promise.all(
+    // Upload files and create documents
+    const uploadedDocuments = await Promise.all(
       files.map(async (file) => {
-        const filePath = `pdfs/${chat.id}/${file.name}`
+        const filePath = `pdfs/${chatId}/${file.name}`
         
-        // Upload file to storage
+        // Upload to storage
         const { error: uploadError } = await supabaseClient
           .storage
           .from('pdfs')
           .upload(filePath, file, {
             contentType: 'application/pdf',
             cacheControl: '3600',
-            upsert: false // Prevent overwriting existing files
+            upsert: false
           })
 
-        if (uploadError) {
-          throw uploadError
-        }
+        if (uploadError) throw uploadError
 
         // Create document record
         const { data: document, error: docError } = await supabaseClient
           .from('documents')
-          .insert([
-            {
-              chat_id: chat.id,
-              name: file.name,
-              file_path: filePath,
-              upload_date: new Date().toISOString(),
-              processing_status: 'pending',
-              size_bytes: file.size // Store file size for future reference
-            }
-          ])
+          .insert([{
+            chat_id: chatId,
+            name: file.name,
+            file_path: filePath,
+            upload_date: new Date().toISOString(),
+            processing_status: 'pending',
+          }])
           .select()
           .single()
 
-        if (docError) {
-          throw docError
+        if (docError) throw docError
+
+        // Trigger processing
+        const processingResponse = await fetch(
+          `${Deno.env.get('SUPABASE_URL')}/functions/v1/document-processor`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${authHeader.split(' ')[1]}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              chatId: chatId,
+              documentIds: [document.id]
+            })
+          }
+        );
+
+        if (!processingResponse.ok) {
+          console.error('Processing trigger failed:', await processingResponse.text());
         }
 
         return {
           filename: file.name,
           documentId: document.id,
-          size: file.size
         }
       })
     )
 
     return new Response(
-      JSON.stringify({
-        chatId: chat.id,
-        documents: results
-      }),
+      JSON.stringify({ documents: uploadedDocuments }),
       {
         headers: {
           ...corsHeaders,
@@ -148,11 +150,10 @@ serve(async (req: Request) => {
       }
     )
 
-  } catch (error:any) {
+  } catch (error: any) {
+    console.error('Upload error:', error);
     return new Response(
-      JSON.stringify({
-        error: error.message
-      }),
+      JSON.stringify({ error: error.message }),
       {
         headers: {
           ...corsHeaders,
