@@ -34,6 +34,7 @@ const UploadPDF = () => {
   };
 
   const handleUpload = async () => {
+    console.log('Uploading files:', files);
     if (files.length === 0) {
       toast.error('Please select at least one PDF file.');
       return;
@@ -43,6 +44,7 @@ const UploadPDF = () => {
     try {
       // Get session
       const { data: { session } } = await supabase.auth.getSession();
+      console.log('Active session:', session);
       if (!session) throw new Error('No active session');
   
       // Create chat first
@@ -50,6 +52,7 @@ const UploadPDF = () => {
         user_id: session.user.id,
         title: files.length === 1 ? files[0].name : 'Multiple PDFs Chat'
       });
+      console.log('Chat created:', chat);
   
       if (chatError) throw chatError;
       setCurrentChatId(chat.id);

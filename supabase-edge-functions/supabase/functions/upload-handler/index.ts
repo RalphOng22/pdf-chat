@@ -4,22 +4,32 @@ import { corsHeaders } from '../shared/cors.ts'
 
 // Constants
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB in bytes
+const MAX_FILES = 5 // Maximum number of files per upload
+
+interface UploadedDocument {
+  filename: string
+  documentId: number
+}
 
 serve(async (req: Request) => {
+  // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
+    // Method validation
     if (req.method !== 'POST') {
       throw new Error('Method not allowed')
     }
 
+    // Auth validation
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       throw new Error('No authorization header')
     }
 
+    // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
@@ -31,33 +41,40 @@ serve(async (req: Request) => {
       }
     )
 
-    const { data: { user }, error: verificationError } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''))
+    // Verify user token
+    const { data: { user }, error: verificationError } = await supabaseClient.auth.getUser(
+      authHeader.replace('Bearer ', '')
+    )
     if (verificationError || !user) {
       throw new Error('Invalid token')
     }
 
+    // Parse form data
     const formData = await req.formData()
     const chatId = formData.get('chatId')
     const filesData = formData.getAll('files')
 
-    if (!chatId) {
-      throw new Error('Chat ID is required')
+    // Validate chat ID
+    if (!chatId || typeof chatId !== 'string') {
+      throw new Error('Valid Chat ID is required')
     }
 
+    // Validate files
     if (filesData.length === 0) {
       throw new Error('No files provided')
     }
 
-    const isFile = (value: FormDataEntryValue): value is File => {
-      return value instanceof File
+    if (filesData.length > MAX_FILES) {
+      throw new Error(`Maximum ${MAX_FILES} files allowed per upload`)
     }
 
-    const files = filesData.filter(isFile)
+    // Filter valid files
+    const files = filesData.filter((value): value is File => value instanceof File)
     if (files.length === 0) {
       throw new Error('No valid files provided')
     }
 
-    // Validate files
+    // Validate file types and sizes
     for (const file of files) {
       if (!file.name.toLowerCase().endsWith('.pdf')) {
         throw new Error(`Invalid file type for ${file.name}. Only PDFs are allowed.`)
@@ -68,7 +85,7 @@ serve(async (req: Request) => {
       }
     }
 
-    // Verify chat
+    // Verify chat ownership
     const { data: chat, error: chatError } = await supabaseClient
       .from('chats')
       .select('id')
@@ -80,11 +97,13 @@ serve(async (req: Request) => {
       throw new Error('Chat not found or unauthorized')
     }
 
-    // Upload files and create documents
-    const uploadedDocuments = await Promise.all(
-      files.map(async (file) => {
-        const filePath = `pdfs/${chatId}/${file.name}`
-        
+    // Upload files and create document records
+    const uploadedDocuments: UploadedDocument[] = []
+    
+    for (const file of files) {
+      const filePath = `pdfs/${chatId}/${file.name}`
+      
+      try {
         // Upload to storage
         const { error: uploadError } = await supabaseClient
           .storage
@@ -112,7 +131,25 @@ serve(async (req: Request) => {
 
         if (docError) throw docError
 
-        // Trigger processing
+        uploadedDocuments.push({
+          filename: file.name,
+          documentId: document.id
+        })
+
+      } catch (error) {
+        // If document creation fails, clean up the uploaded file
+        try {
+          await supabaseClient.storage.from('pdfs').remove([filePath])
+        } catch (cleanupError) {
+          console.error(`Failed to cleanup file after error: ${cleanupError}`)
+        }
+        throw error
+      }
+    }
+
+    // Trigger processing for all uploaded documents
+    if (uploadedDocuments.length > 0) {
+      try {
         const processingResponse = await fetch(
           `${Deno.env.get('SUPABASE_URL')}/functions/v1/document-processor`,
           {
@@ -122,25 +159,35 @@ serve(async (req: Request) => {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              chatId: chatId,
-              documentIds: [document.id]
+              chatId,
+              documentIds: uploadedDocuments.map(doc => doc.documentId)
             })
           }
-        );
+        )
 
         if (!processingResponse.ok) {
-          console.error('Processing trigger failed:', await processingResponse.text());
+          console.error('Processing trigger failed:', await processingResponse.text())
+          // Mark documents as failed if processing couldn't be initiated
+          await supabaseClient
+            .from('documents')
+            .update({ processing_status: 'failed' })
+            .in('id', uploadedDocuments.map(doc => doc.documentId))
         }
-
-        return {
-          filename: file.name,
-          documentId: document.id,
-        }
-      })
-    )
+      } catch (error) {
+        console.error('Failed to trigger document processing:', error)
+        // Mark documents as failed if processing couldn't be initiated
+        await supabaseClient
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .in('id', uploadedDocuments.map(doc => doc.documentId))
+      }
+    }
 
     return new Response(
-      JSON.stringify({ documents: uploadedDocuments }),
+      JSON.stringify({
+        message: 'Files uploaded successfully',
+        documents: uploadedDocuments
+      }),
       {
         headers: {
           ...corsHeaders,
@@ -151,9 +198,12 @@ serve(async (req: Request) => {
     )
 
   } catch (error: any) {
-    console.error('Upload error:', error);
+    console.error('Upload error:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ 
+        error: error.message,
+        details: error.stack 
+      }),
       {
         headers: {
           ...corsHeaders,

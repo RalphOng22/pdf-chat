@@ -56,7 +56,7 @@ class ServiceIntegrator:
             })
             
             try:
-                # Download file using our download_file method that uses signed URLs
+                # Download file
                 file = await self.download_file(file_path)
                 
                 # Extract content
@@ -68,14 +68,14 @@ class ServiceIntegrator:
                 
                 # Process tables
                 for table in extracted_content.get('tables', []):
-                    embedding = await self.gemini.generate_embedding(str(table['text']))
+                    embedding = await self.gemini.generate_embedding(table['text'])
                     chunks.append({
                         'document_id': doc_id,
                         'chunk_index': chunk_index,
                         'chunk_type': 'table',
                         'text': table['text'],
                         'page_number': table['page_number'],
-                        'table_data': table['data'],
+                        'table_data': table['table_data'],  # Already JSON string from document_extractor
                         'embedding': embedding
                     })
                     chunk_index += 1
@@ -94,14 +94,13 @@ class ServiceIntegrator:
                     })
                     chunk_index += 1
 
-                # Store chunks with chat_id context
+                # Store chunks
                 if chunks:
-                    logger.info(f"Storing {len(chunks)} chunks for document {doc_id} in chat {chat_id}")
-                    await self.supabase.store_chunks(chunks)
+                    logger.info(f"Storing {len(chunks)} chunks for document {doc_id}")
+                    await self.supabase.store_chunks(doc_id, chunks) 
 
                 # Update document metadata
                 await self.supabase.update_document(doc_id, {
-                    'chat_id': chat_id,
                     'page_count': extracted_content['metadata']['total_pages'],
                     'processing_status': 'completed'
                 })
@@ -113,7 +112,7 @@ class ServiceIntegrator:
                     'page_count': extracted_content['metadata']['total_pages'],
                     'status': 'success'
                 }
-                
+                    
             except Exception as e:
                 logger.error(f"Error processing document {doc_id} in chat {chat_id}: {str(e)}")
                 await self.supabase.update_document(doc_id, {
@@ -166,26 +165,40 @@ class ServiceIntegrator:
             query_embedding = await self.gemini.generate_embedding(query)
             
             # Find similar chunks
-            chunks = await self.supabase.find_similar_chunks(
+            raw_chunks = await self.supabase.find_similar_chunks(
                 embedding=query_embedding,
                 chat_id=chat_id,
                 document_ids=document_ids
             )
             
-            # Generate response
-            response = await self.gemini.generate_response(query, chunks)
+            # Format chunks for Gemini
+            formatted_chunks = []
+            for chunk in raw_chunks:
+                formatted_chunk = {
+                    'document_id': chunk['document_id'],
+                    'document_name': chunk['document_name'],  # Now available from SQL
+                    'page_number': chunk['page_number'],
+                    'chunk_type': chunk['chunk_type'],
+                    'text': chunk['text'],
+                    'table_data': chunk.get('table_data'),
+                    'similarity': chunk['similarity']
+                }
+                formatted_chunks.append(formatted_chunk)
+            
+            # Generate response with formatted chunks
+            response = await self.gemini.generate_response(query, formatted_chunks)
             
             # Store query and response
             await self.supabase.store_query(
                 chat_id=chat_id,
                 query_text=query,
                 response_text=response,
-                source_references=chunks
+                source_references=formatted_chunks
             )
             
             return {
                 'response': response,
-                'source_references': chunks
+                'source_references': formatted_chunks
             }
             
         except Exception as e:

@@ -4,9 +4,12 @@ from datetime import datetime
 from enum import Enum
 
 # Enums
+
+
 class ChunkType(str, Enum):
     TEXT = "text"
     TABLE = "table"
+
 
 class ProcessingStatus(str, Enum):
     PROCESSING = "processing"
@@ -14,12 +17,16 @@ class ProcessingStatus(str, Enum):
     FAILED = "failed"
 
 # Table Data Models
+
+
 class TableData(BaseModel):
     headers: List[str]
     data: List[Dict[str, str]]
     html: Optional[str] = None
 
 # Source References
+
+
 class SourceReference(BaseModel):
     document_id: int
     document_name: str
@@ -30,14 +37,18 @@ class SourceReference(BaseModel):
     similarity: float = Field(ge=0.0, le=1.0)
 
 # Request/Response Models
+
+
 class QueryRequest(BaseModel):
     query: str
     chat_id: UUID4
     document_ids: Optional[List[int]] = None
 
+
 class QueryResponse(BaseModel):
     response: str
     source_references: List[SourceReference]
+
 
 class ProcessingResponse(BaseModel):
     filename: str
@@ -68,6 +79,8 @@ class ProcessingResponse(BaseModel):
         )
 
 # Database Models
+
+
 class Document(BaseModel):
     id: int
     chat_id: UUID4
@@ -80,6 +93,7 @@ class Document(BaseModel):
     class Config:
         from_attributes = True
 
+
 class Chunk(BaseModel):
     id: int
     document_id: int
@@ -88,10 +102,12 @@ class Chunk(BaseModel):
     text: str
     page_number: int
     table_data: Optional[Dict] = None
-    embedding: conlist(float, min_length=768, max_length=768)  # Validate embedding dimension
+    # Validate embedding dimension
+    embedding: conlist(float, min_length=768, max_length=768)
 
     class Config:
         from_attributes = True
+
 
 class Query(BaseModel):
     id: int

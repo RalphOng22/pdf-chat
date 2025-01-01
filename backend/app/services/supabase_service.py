@@ -2,8 +2,10 @@ from supabase import create_client
 from typing import Dict, List, Optional
 import logging
 from app.config import settings
+import json
 
 logger = logging.getLogger(__name__)
+
 
 class SupabaseService:
     def __init__(self):
@@ -39,11 +41,40 @@ class SupabaseService:
             logger.error(f"Error updating document: {str(e)}")
             raise
 
-    async def store_chunks(self, chunks: List[Dict]) -> List[Dict]:
+    async def store_chunks(self, document_id: int, chunks: List[Dict]) -> List[Dict]:
         """Store document chunks with embeddings"""
         try:
-            if chunks:
-                result = self.client.table('chunks').insert(chunks).execute()
+            formatted_chunks = []
+            for idx, chunk in enumerate(chunks):
+                # Ensure table_data is properly JSON encoded if present
+                table_data = None
+                if chunk.get("table_data"):
+                    if isinstance(chunk["table_data"], str):
+                        # If it's already a JSON string, verify it's valid
+                        try:
+                            json.loads(chunk["table_data"])
+                            table_data = chunk["table_data"]
+                        except json.JSONDecodeError:
+                            table_data = json.dumps(chunk["table_data"])
+                    else:
+                        # If it's a dict/object, convert to JSON string
+                        table_data = json.dumps(chunk["table_data"])
+
+                formatted_chunk = {
+                    "document_id": document_id,
+                    "chunk_index": idx,
+                    "chunk_type": chunk["chunk_type"],
+                    "text": chunk["text"],
+                    "page_number": chunk["page_number"],
+                    "table_data": table_data,
+                    # Make sure embedding is included
+                    "embedding": chunk.get("embedding")
+                }
+                formatted_chunks.append(formatted_chunk)
+
+            if formatted_chunks:
+                result = self.client.table('chunks').insert(
+                    formatted_chunks).execute()
                 return result.data
             return []
         except Exception as e:
@@ -60,14 +91,14 @@ class SupabaseService:
     ) -> List[Dict]:
         """Find similar chunks using vector similarity"""
         try:
+            # Format params exactly as defined in the SQL function
             params = {
                 'query_embedding': embedding,
                 'similarity_threshold': threshold,
-                'match_count': limit
+                'match_count': limit,
+                'filter_document_ids': document_ids if document_ids else None
             }
-            if document_ids:
-                params['filter_document_ids'] = document_ids
-            
+
             result = self.client.rpc('match_documents', params).execute()
             return result.data
         except Exception as e:
@@ -77,13 +108,41 @@ class SupabaseService:
     async def store_query(self, chat_id: str, query_text: str, response_text: str, source_references: List[Dict]):
         """Store query and response"""
         try:
+            processed_references = []
+            for ref in source_references:
+                processed_ref = {
+                    'document_id': int(ref.get('document_id')),
+                    'document_name': str(ref.get('document_name')),
+                    'page_number': int(ref.get('page_number')),
+                    'text': str(ref.get('text')),
+                    'chunk_type': str(ref.get('chunk_type', 'text')),
+                    'similarity': float(ref.get('similarity', 0.0))
+                }
+
+                # Handle table_data properly
+                if 'table_data' in ref and ref['table_data']:
+                    if isinstance(ref['table_data'], str):
+                        try:
+                            # Verify it's valid JSON if it's a string
+                            json.loads(ref['table_data'])
+                            processed_ref['table_data'] = ref['table_data']
+                        except json.JSONDecodeError:
+                            processed_ref['table_data'] = json.dumps(
+                                ref['table_data'])
+                    else:
+                        processed_ref['table_data'] = json.dumps(
+                            ref['table_data'])
+
+                processed_references.append(processed_ref)
+
             data = {
-                'chat_id': chat_id,
+                'chat_id': str(chat_id),
                 'query_text': query_text,
                 'response_text': response_text,
-                'source_references': source_references,
+                'source_references': processed_references,
                 'timestamp': 'NOW()'
             }
+
             result = self.client.table('queries').insert(data).execute()
             return result.data[0]
         except Exception as e:
