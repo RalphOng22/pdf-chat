@@ -119,10 +119,11 @@ const ChatLayout = () => {
 
   const handleSourceClick = async (source) => {
     try {
+      console.log("Documents: ",documents);
       const document = documents.find(doc => 
         doc.id === source.documentId || doc.name === source.documentName
       );
-      
+      console.log("Source: ",source);
       if (!document) throw new Error('Document not found');
 
       const { data: { signedUrl }, error } = await supabase.storage

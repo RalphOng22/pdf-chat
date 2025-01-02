@@ -13,9 +13,9 @@ export function ChatMessage({ isUser, message, sources = [], onSourceClick }) {
     const handleSourceClick = (source) => {
       console.log('Source clicked:', source);
       onSourceClick?.({
-        documentId: source.documentId,
-        pageNumber: source.pageNumber,
-        documentName: source.documentName,
+        documentId: source.document_id,
+        pageNumber: source.page_number,
+        documentName: source.document_name,
       });
     };
   
@@ -51,9 +51,9 @@ export function ChatMessage({ isUser, message, sources = [], onSourceClick }) {
                   {expanded &&
                     sources.map((source, index) => (
                       <SourceReference
-                        key={`${source.documentId}-${source.pageNumber}-${index}`}
-                        documentName={source.documentName}
-                        pageNumber={source.pageNumber}
+                        key={`${source.document_id}-${source.page_number}-${index}`}
+                        documentName={source.document_name}
+                        pageNumber={source.page_number}
                         text={source.text}
                         onClick={() => handleSourceClick(source)}
                       />
