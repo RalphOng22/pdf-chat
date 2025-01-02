@@ -86,19 +86,23 @@ class SupabaseService:
         embedding: List[float],
         chat_id: Optional[str] = None,
         document_ids: Optional[List[int]] = None,
-        threshold: float = 0.7,
-        limit: int = 5
+        threshold: float = 0.3,  # Increased from default for more precise matches
+        limit: int = 10  # Increased to ensure we get full context
     ) -> List[Dict]:
         """Find similar chunks using vector similarity"""
         try:
-            # Format params exactly as defined in the SQL function
             params = {
                 'query_embedding': embedding,
                 'similarity_threshold': threshold,
                 'match_count': limit,
                 'filter_document_ids': document_ids if document_ids else None
             }
-
+            logger.info(f"""
+            Searching with params:
+            Threshold: {threshold}
+            Query embedding length: {len(embedding)}
+            Doc IDs filter: {document_ids}
+            """)
             result = self.client.rpc('match_documents', params).execute()
             return result.data
         except Exception as e:

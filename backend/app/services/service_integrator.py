@@ -7,6 +7,7 @@ from ..config import Settings
 import logging
 import asyncio
 import httpx
+import json
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -159,46 +160,33 @@ class ServiceIntegrator:
         chat_id: str,
         document_ids: Optional[List[int]] = None
     ) -> Dict:
-        """Query processed documents"""
         try:
             # Generate query embedding
             query_embedding = await self.gemini.generate_embedding(query)
             
-            # Find similar chunks
-            raw_chunks = await self.supabase.find_similar_chunks(
+            # Find similar chunks with adjusted threshold
+            chunks = await self.supabase.find_similar_chunks(
                 embedding=query_embedding,
                 chat_id=chat_id,
-                document_ids=document_ids
+                document_ids=document_ids,
+                threshold=0.3,  # Higher threshold for better matches
+                limit=10  # Get more context
             )
-            
-            # Format chunks for Gemini
-            formatted_chunks = []
-            for chunk in raw_chunks:
-                formatted_chunk = {
-                    'document_id': chunk['document_id'],
-                    'document_name': chunk['document_name'],  # Now available from SQL
-                    'page_number': chunk['page_number'],
-                    'chunk_type': chunk['chunk_type'],
-                    'text': chunk['text'],
-                    'table_data': chunk.get('table_data'),
-                    'similarity': chunk['similarity']
-                }
-                formatted_chunks.append(formatted_chunk)
-            
-            # Generate response with formatted chunks
-            response = await self.gemini.generate_response(query, formatted_chunks)
-            
-            # Store query and response
+            logger.info(f"Found chunks: {json.dumps(chunks, indent=2)}")
+            # Generate response with enhanced formatting
+            response = await self.gemini.generate_response(query, chunks)
+
             await self.supabase.store_query(
                 chat_id=chat_id,
                 query_text=query,
                 response_text=response,
-                source_references=formatted_chunks
+                source_references=chunks
             )
+            
             
             return {
                 'response': response,
-                'source_references': formatted_chunks
+                'source_references': chunks
             }
             
         except Exception as e:

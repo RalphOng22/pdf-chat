@@ -42,35 +42,60 @@ class GeminiService:
                 
                 if ref.get('table_data'):
                     try:
-                        table_info = json.loads(ref['table_data'])
-                        if table_info.get('html'):
-                            context_parts.append(f"{source}\n{table_info['html']}")
+                        # Ensure table_data is properly parsed
+                        if isinstance(ref['table_data'], str):
+                            table_data = json.loads(ref['table_data'])
                         else:
-                            context_parts.append(f"{source}\n{table_info['text']}")
+                            table_data = ref['table_data']
+                        
+                        # Include both text and HTML representation
+                        context_parts.append(
+                            f"{source}\n"
+                            f"Table Text: {table_data.get('text', '')}\n"
+                            f"Table Structure: {table_data.get('html', '')}"
+                        )
                     except json.JSONDecodeError:
                         context_parts.append(f"{source}\n{ref['text']}")
                 else:
                     context_parts.append(f"{source}\n{ref['text']}")
 
-            context = "\n\n".join(context_parts)
+            logger.info(f"Source references received: {json.dumps(source_references, indent=2)}")
+
+            prompt = (
+                "You are analyzing financial statements from official company documents. "
+                "When analyzing financial statements:\n"
+                "1. Maintain the original structure and hierarchy\n"
+                "2. Break down into Operating, Investing, and Financing Activities\n"
+                "3. Show all time periods in columns (Three/Nine/Twelve Months Ended)\n"
+                "4. Format numbers with $ prefix, commas, and parentheses for negatives\n"
+                "5. Preserve all subtotals and totals\n"
+                "6. Include relevant notes\n\n"
+                "Context:\n"
+                "{}\n\n"
+                "Question: {}"
+            ).format('\n\n'.join(context_parts), query)
             
-            prompt = f"""Based on the following excerpts from documents, answer the user's question.
-            When referring to specific numbers or data from tables, use the formatted table data.
+            logger.info(f"Generated prompt: {prompt}")
+            result = await self._generate_response(prompt)
+        
+            return result
+                
+        except Exception as e:
+            logger.error(f"Error generating response: {str(e)}")
+            raise
 
-            Context:
-            {context}
-
-            Question: {query}"""
-
+    async def _generate_response(self, prompt: str) -> str:
+        """Generate response using Gemini model"""
+        try:
             # Run the synchronous generate_content in a thread pool
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.model.generate_content(prompt).text
+                lambda: self.model.generate_content(prompt)
             )
             
-            return response
-                
+            return response.text
+            
         except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
+            logger.error(f"Error in _generate_response: {str(e)}")
             raise

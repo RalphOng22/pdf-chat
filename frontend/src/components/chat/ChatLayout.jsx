@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, X, Menu } from 'lucide-react';
+import { FileText, Menu } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../../services/supabase.js';
 import ProcessingStatus from '../shared/ProcessingStatus.jsx';
@@ -139,6 +139,7 @@ const ChatLayout = () => {
       setShowPDFViewer(true);
     } catch (error) {
       console.error('Error getting PDF URL:', error);
+      console.error(document.file_path);
       toast.error('Failed to load PDF');
     }
   };

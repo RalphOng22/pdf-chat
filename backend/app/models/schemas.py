@@ -20,9 +20,9 @@ class ProcessingStatus(str, Enum):
 
 
 class TableData(BaseModel):
-    headers: List[str]
-    data: List[Dict[str, str]]
-    html: Optional[str] = None
+    text: str
+    html: str
+    page_number: int
 
 # Source References
 
@@ -30,10 +30,10 @@ class TableData(BaseModel):
 class SourceReference(BaseModel):
     document_id: int
     document_name: str
-    page_number: int
+    page_number: int 
     chunk_type: ChunkType
     text: str
-    table_data: Optional[TableData] = None
+    table_data: Optional[str] = None
     similarity: float = Field(ge=0.0, le=1.0)
 
 # Request/Response Models

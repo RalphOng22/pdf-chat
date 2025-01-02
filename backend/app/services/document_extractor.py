@@ -6,7 +6,7 @@ from ..config import Settings
 from fastapi import UploadFile
 import asyncio
 from unstructured_client import UnstructuredClient
-from unstructured_client.models.shared import Strategy
+from unstructured_client.models.shared import Strategy, ChunkingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class DocumentExtractor:
         }
 
     async def process_file(self, file: UploadFile) -> Dict:
-        """Process a single PDF file asynchronously using Unstructured API."""
+        """Process single PDF file using unstructured API with title strategy"""
         try:
             content = await file.read()
             logger.info(f"Processing file {file.filename} with Unstructured API SDK (async)")
@@ -84,8 +84,17 @@ class DocumentExtractor:
                         "content": content,
                         "file_name": file.filename,
                     },
+
                     "strategy": Strategy.HI_RES,
-                    "output_format":"application/json"
+                    "chunking_strategy": ChunkingStrategy.BY_TITLE,
+
+                    # Add new parameters for better title handling
+                    "combine_text_under_n_chars": 250,  # Adjust this value based on your needs
+                    "include_page_breaks": True,
+                    "hierarchy": True,
+                    "add_document_metadata": True,
+                    "include_table_data": True,
+                    "output_format": "application/json"
                 }
             }
 
@@ -94,7 +103,7 @@ class DocumentExtractor:
             logger.info(f"First element in res.elements: {res.elements[0]}")
 
             response_elements = res.elements
-
+            
             processed_result = self._process_response(response_elements, file.filename)
 
             logger.info(
@@ -105,6 +114,7 @@ class DocumentExtractor:
             )
 
             return processed_result
+            
         except Exception as e:
             logger.error(f"Error processing file {file.filename}: {e}", exc_info=True)
             raise
