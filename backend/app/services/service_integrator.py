@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 class ServiceIntegrator:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.gemini = GeminiService(settings)
         self.supabase = SupabaseService()
+        self.gemini = GeminiService(settings, self.supabase)
         self.document_extractor = DocumentExtractor(settings)
         
     async def download_file(self, file_path: str) -> UploadFile:
@@ -48,59 +48,36 @@ class ServiceIntegrator:
             raise
 
     async def process_document(self, doc_id: int, file_path: str, chat_id: str) -> Dict:
-        """Process single document from storage path"""
+        """Process single document from storage path using natural document order"""
         logger.info(f"Processing document {doc_id} from chat {chat_id}")
         try:
-            # Update initial status
             await self.supabase.update_document(doc_id, {
                 'processing_status': 'processing'
             })
             
             try:
-                # Download file
                 file = await self.download_file(file_path)
-                
-                # Extract content
                 extracted_content = await self.document_extractor.process_file(file)
                 
-                # Process chunks and generate embeddings
                 chunks = []
-                chunk_index = 0
-                
-                # Process tables
-                for table in extracted_content.get('tables', []):
-                    embedding = await self.gemini.generate_embedding(table['text'])
-                    chunks.append({
-                        'document_id': doc_id,
-                        'chunk_index': chunk_index,
-                        'chunk_type': 'table',
-                        'text': table['text'],
-                        'page_number': table['page_number'],
-                        'table_data': table['table_data'],  # Already JSON string from document_extractor
-                        'embedding': embedding
-                    })
-                    chunk_index += 1
-                
-                # Process text chunks
-                for text_chunk in extracted_content.get('text_chunks', []):
-                    embedding = await self.gemini.generate_embedding(text_chunk['text'])
-                    chunks.append({
-                        'document_id': doc_id,
-                        'chunk_index': chunk_index,
-                        'chunk_type': 'text',
-                        'text': text_chunk['text'],
-                        'page_number': text_chunk['page_number'],
-                        'table_data': None,
-                        'embedding': embedding
-                    })
-                    chunk_index += 1
 
-                # Store chunks
+                for chunk_index, element in enumerate(extracted_content.get('elements', [])):
+                    embedding = await self.gemini.generate_embedding(element['text'])
+                    
+                    chunks.append({
+                        'document_id': doc_id,
+                        'chunk_index': chunk_index,
+                        'chunk_type': element['chunk_type'],
+                        'text': element['text'],
+                        'page_number': element['page_number'],
+                        'table_data': element['table_data'],
+                        'embedding': embedding
+                    })
+
                 if chunks:
                     logger.info(f"Storing {len(chunks)} chunks for document {doc_id}")
-                    await self.supabase.store_chunks(doc_id, chunks) 
+                    await self.supabase.store_chunks(doc_id, chunks)
 
-                # Update document metadata
                 await self.supabase.update_document(doc_id, {
                     'page_count': extracted_content['metadata']['total_pages'],
                     'processing_status': 'completed'
@@ -169,8 +146,8 @@ class ServiceIntegrator:
                 embedding=query_embedding,
                 chat_id=chat_id,
                 document_ids=document_ids,
-                threshold=0.3,  # Higher threshold for better matches
-                limit=10  # Get more context
+                threshold=0.35,  
+                limit=5  # Get more context
             )
             logger.info(f"Found chunks: {json.dumps(chunks, indent=2)}")
             # Generate response with enhanced formatting

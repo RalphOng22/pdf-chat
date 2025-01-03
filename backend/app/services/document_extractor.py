@@ -25,9 +25,11 @@ class DocumentExtractor:
 
     def _process_response(self, response_elements: List[Dict], filename: str) -> Dict:
         """Process the response from Unstructured API."""
-        text_chunks = []
-        tables = []
+        elements = []
         total_pages = 0
+        
+        element_types = [element.get("type", "").lower() for element in response_elements]
+        logger.info(f"Element types found in document: {set(element_types)}")
 
         for element in response_elements:
             page_number = element.get("metadata", {}).get("page_number", 1)
@@ -46,29 +48,33 @@ class DocumentExtractor:
                     "page_number": page_number
                 }
                 
-                tables.append({
+                elements.append({
                     "text": text,
                     "page_number": page_number,
                     "chunk_type": "table",
                     "table_data": json.dumps(table_data)  # Store as JSON string for database
                 })
-            elif element_type in ["text", "title", "narrative_text"]:
+            elif element_type in ["text", "title", "narrativetext", "uncategorizedtext", "compositeelement"]:
                 cleaned_text = self._clean_text(element.get("text", ""))
                 if cleaned_text:
-                    text_chunks.append({
+                    elements.append({
                         "text": cleaned_text, 
                         "page_number": page_number,
                         "chunk_type": "text",
                         "table_data": None
                     })
 
+        text_chunks = [e for e in elements if e["chunk_type"] == "text"]
+        tables = [e for e in elements if e["chunk_type"] == "table"]
+
         return {
-            "text_chunks": text_chunks,
-            "tables": tables,
+            "elements": elements, 
+            "text_chunks": text_chunks,  
+            "tables": tables, 
             "metadata": {
                 "filename": filename,
                 "total_pages": total_pages,
-                "chunk_count": len(text_chunks) + len(tables),
+                "chunk_count": len(elements),
             },
         }
 
@@ -86,10 +92,8 @@ class DocumentExtractor:
                     },
 
                     "strategy": Strategy.HI_RES,
-                    "chunking_strategy": ChunkingStrategy.BY_TITLE,
+                    # "chunking_strategy": ChunkingStrategy.BY_PAGE,
 
-                    # Add new parameters for better title handling
-                    "combine_text_under_n_chars": 250,  # Adjust this value based on your needs
                     "include_page_breaks": True,
                     "hierarchy": True,
                     "add_document_metadata": True,
