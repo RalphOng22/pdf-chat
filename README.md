@@ -122,30 +122,50 @@ To deploy the Supabase edge functions, follow these steps:
 
 ---
 
-## **4. Running the Full Application**
+## **4. Set up FastAPI backend**
 
-1. Ensure both the React frontend and Supabase edge functions are running.
-2. Test the application by navigating to [http://localhost:3000](http://localhost:3000).
+### **Navigate to the `backend` Directory**
+
+```bash
+cd ../backend
+```
+
+### **Environment Variables**
+
+Create a `.env` file in the `backend` directory with the following variables:
+
+```env
+SUPABASE_URL=
+SUPABASE_KEY=
+SUPABASE_SERVICE_KEY=
+GOOGLE_API_KEY=
+UNSTRUCTURED_API_KEY=
+UNSTRUCTURED_API_URL=
+```
+
+### **Run and Deploy Backend**
+Run the FastAPI Backend
+```bash
+uvicorn main:app --reload
+```
+
+Expose port 8000 to edge functions
+```bash
+ngrok http 8000
+```
+
+## **5. Running the Full Application**
+
+1. Ensure both the React frontend and Supabase edge functions and backend are running.
+2. Use ngrok to expose backend and set the URL as BACKEND_URL in supabase secrets
+3. Test the application by navigating to [http://localhost:3000](http://localhost:3000).
 
 ---
 
-## **5. Folder Structure**
+## **6. Folder Structure**
 
 - `frontend`: Contains the React application.
 - `supabase_edge_functions`: Contains the Supabase edge functions and configuration.
+- `backend` : Contains the document processing and query services
 
 ---
-
-## **6. Troubleshooting**
-
-### Common Issues:
-
-- **Environment Variables Missing**: Ensure all `.env` files are created correctly with valid values.
-- **Supabase Functions Not Working**: Verify the deployment in the Supabase dashboard.
-- **React App Not Starting**: Ensure dependencies are installed using `npm install` or `yarn install`.
-
-For further assistance, check the Supabase [documentation](https://supabase.com/docs) or React [documentation](https://reactjs.org/docs/getting-started.html).
-
----
-
-Feel free to ask if you need further clarification or adjustments! 🚀
