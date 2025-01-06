@@ -1,327 +1,159 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { supabase } from '../services/supabase.js';
-import * as pdfjsLib from 'pdfjs-dist';
-import { Upload, X, FileText, Loader } from 'lucide-react';
+import { supabase, supabaseService } from '../services/supabase.js';
+import { Upload, X, FileText, Loader2 } from 'lucide-react';
+import ProcessingStatus from '../components/shared/ProcessingStatus.jsx';
 
-// Initialize PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 const UploadPDF = () => {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0, fileName: '' });
+  const [uploadedDocs, setUploadedDocs] = useState([]);
+  const [currentChatId, setCurrentChatId] = useState(null);
 
-  const createNewChat = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('No authenticated session found');
-
-      const response = await fetch(`${supabase.functionsUrl}/chat-creator`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create chat');
-      }
-
-      const { chatId } = await response.json();
-      return chatId;
-    } catch (error) {
-      console.error('Error creating chat:', error);
-      throw error;
-    }
-  };
-
-  const extractTextFromPDF = async (file) => {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-      const numPages = pdf.numPages;
-      const textByPage = [];
-  
-      // First, extract text page by page
-      for (let pageNumber = 1; pageNumber <= numPages; pageNumber++) {
-        const page = await pdf.getPage(pageNumber);
-        const content = await page.getTextContent();
-        const text = content.items
-          .map((item) => item.str)
-          .join(' ')
-          .trim();
-        
-        if (text) {
-          textByPage.push({
-            pageNumber,
-            text
-          });
-        }
-      }
-  
-      // Then chunk each page's text while maintaining page reference
-      const chunksWithPages = [];
-      for (const { pageNumber, text } of textByPage) {
-        const pageChunks = chunkText(text).map(chunk => ({
-          text: chunk,
-          page_number: pageNumber
-        }));
-        chunksWithPages.push(...pageChunks);
-      }
-  
-      return {
-        chunks: chunksWithPages,
-        totalPages: numPages
-      };
-    } catch (error) {
-      console.error('Error extracting text from PDF:', error);
-      throw new Error(`Failed to extract text from ${file.name}: ${error.message}`);
-    }
-  };
-
-  const chunkText = (text, maxChunkSize = 500) => {
-    const chunks = [];
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-    let currentChunk = '';
-  
-    for (const sentence of sentences) {
-      // If adding this sentence would exceed maxChunkSize
-      if ((currentChunk + sentence).length > maxChunkSize && currentChunk.length > 0) {
-        chunks.push(currentChunk.trim());
-        currentChunk = '';
-      }
-      currentChunk += sentence + ' ';
-    }
-  
-    if (currentChunk.trim()) {
-      chunks.push(currentChunk.trim());
-    }
-  
-    return chunks;
-  };
-
-  const validateAndAddFile = (selectedFile) => {
-    if (!selectedFile || selectedFile.type !== 'application/pdf') {
+  const validateFile = (file) => {
+    if (!file || !file.type || file.type !== 'application/pdf') {
       toast.error('Please upload a valid PDF file.');
-      return;
+      return false;
     }
 
-    if (selectedFile.size > 10 * 1024 * 1024) {
+    if (file.size > MAX_FILE_SIZE) {
       toast.error('File size must be less than 10 MB.');
-      return;
+      return false;
     }
 
-    if (files.some(f => f.name === selectedFile.name)) {
+    if (files.some(f => f.name === file.name)) {
       toast.error('This file has already been selected.');
-      return;
+      return false;
     }
 
-    setFiles(prev => [...prev, selectedFile]);
-    toast.success('PDF file added successfully!');
-  };
-
-  const handleDragEnter = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  }, []);
-
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    const droppedFile = e.dataTransfer.files[0];
-    validateAndAddFile(droppedFile);
-  }, [files]);
-
-  const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
-    validateAndAddFile(selectedFile);
-  };
-
-  const removeFile = (fileName) => {
-    setFiles(files.filter(file => file.name !== fileName));
+    return true;
   };
 
   const handleUpload = async () => {
+    console.log('Uploading files:', files);
     if (files.length === 0) {
       toast.error('Please select at least one PDF file.');
       return;
     }
   
     setLoading(true);
-    setProgress({ current: 0, total: files.length, fileName: '' });
-  
     try {
-      const chatId = await createNewChat();
-      if (!chatId) {
-        throw new Error('Failed to create chat');
-      }
+      // Get session
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('Active session:', session);
+      if (!session) throw new Error('No active session');
   
-      let successCount = 0;
-  
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        console.log(`Processing file ${i + 1}/${files.length}:`, {
-          name: file.name,
-          size: file.size,
-          type: file.type
-        });
-  
-        setProgress(prev => ({
-          ...prev,
-          current: i + 1,
-          fileName: file.name,
-        }));
-  
-        try {
-          // Validate file name for storage
-          const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-          const filePath = `pdfs/${chatId}/${sanitizedFileName}`;
-          
-          console.log('Attempting storage upload with:', {
-            bucket: 'pdfs',
-            filePath,
-            fileSize: file.size,
-            fileType: file.type
-          });
-  
-          // Upload file to storage with detailed error logging
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('pdfs')
-            .upload(filePath, file, {
-              cacheControl: '3600',
-              upsert: false
-            });
-  
-          if (uploadError) {
-            console.error('Storage upload error details:', {
-              error: uploadError,
-              statusCode: uploadError.statusCode,
-              message: uploadError.message,
-              details: uploadError.details
-            });
-            throw new Error(`Storage upload failed for ${file.name}: ${uploadError.message}`);
-          }
-  
-          console.log('File uploaded successfully:', uploadData);
-  
-          // Process PDF with improved extraction
-          console.log('Starting PDF text extraction...');
-          const { chunks: textChunksWithPages, totalPages } = await extractTextFromPDF(file);
-          console.log('PDF extraction completed:', {
-            totalPages,
-            chunksCount: textChunksWithPages.length
-          });
-  
-          // Send to embedding generator
-          const { data: sessionData } = await supabase.auth.getSession();
-          console.log('Sending to embedding generator:', {
-            fileName: sanitizedFileName,
-            filePath,
-            chunksCount: textChunksWithPages.length
-          });
-  
-          const response = await fetch(`${supabase.functionsUrl}/embedding-generator`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${sessionData.session.access_token}`,
-            },
-            body: JSON.stringify({
-              fileName: sanitizedFileName,
-              filePath,
-              textChunks: textChunksWithPages,
-              chatId,
-              totalPages,
-            }),
-          });
-  
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Embedding generator failed for ${file.name}: ${errorData.error || 'Unknown error'}`);
-          }
-  
-          console.log('Embedding generation completed successfully');
-          successCount++;
-  
-        } catch (error) {
-          console.error(`Detailed error processing file ${file.name}:`, {
-            error,
-            stack: error.stack,
-            fileName: file.name,
-            fileSize: file.size,
-            fileType: file.type
-          });
-          toast.error(`Failed to process ${file.name}: ${error.message}`);
-        }
-      }
-  
-      // Handle completion
-      if (successCount === files.length) {
-        toast.success('All PDFs uploaded and processed successfully!');
-        navigate(`/chat/${chatId}`);
-      } else if (successCount > 0) {
-        toast.warning(`Successfully processed ${successCount} out of ${files.length} files`);
-        navigate(`/chat/${chatId}`);
-      } else {
-        toast.error('Failed to process any files');
-      }
-  
-      setFiles([]);
-    } catch (error) {
-      console.error('General upload error:', {
-        error,
-        stack: error.stack,
-        context: 'handleUpload main try-catch'
+      // Create chat first
+      const { data: chat, error: chatError } = await supabaseService.createChat({
+        user_id: session.user.id,
+        title: files.length === 1 ? files[0].name : 'Multiple PDFs Chat'
       });
-      toast.error(`Upload error: ${error.message || 'Unknown error occurred'}`);
+      console.log('Chat created:', chat);
+  
+      if (chatError) throw chatError;
+      setCurrentChatId(chat.id);
+  
+      // Upload documents
+      const { documents } = await supabaseService.uploadDocuments(files, chat.id, session);
+      if (!documents?.length) throw new Error('No documents were uploaded');
+      
+      setUploadedDocs(documents.map(doc => ({
+        id: doc.documentId,
+        name: doc.filename,
+        processing_status: 'pending'
+      })));
+  
+      // Start processing
+      const processResult = await supabaseService.processDocuments(
+        chat.id,
+        documents.map(doc => doc.documentId),
+        session
+      );
+  
+      console.log('Processing started:', processResult);
+      
+      toast.success('Files uploaded and processing started');
+      navigate(`/chat/${chat.id}`);
+  
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error(`Upload failed: ${error.message}`);
+      // Clean up if needed
+      if (currentChatId) {
+        await supabaseService.deleteChat(currentChatId);
+      }
+      setCurrentChatId(null);
+      setUploadedDocs([]);
     } finally {
       setLoading(false);
-      setProgress({ current: 0, total: 0, fileName: '' });
     }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const droppedFile = e.dataTransfer.files[0];
+    if (validateFile(droppedFile)) {
+      setFiles(prev => [...prev, droppedFile]);
+      toast.success('PDF added successfully!');
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    const selectedFile = e.target.files[0];
+    if (validateFile(selectedFile)) {
+      setFiles(prev => [...prev, selectedFile]);
+      toast.success('PDF added successfully!');
+    }
+  };
+
+  const removeFile = (fileName) => {
+    setFiles(files.filter(file => file.name !== fileName));
   };
 
   return (
     <div className="w-full max-w-2xl mx-auto">
-      <h1 className="text-3xl font-medium text-gray-900 mb-8">Upload Your PDF</h1>
+      <h1 className="text-3xl font-medium text-gray-900 mb-8">Upload Your PDFs</h1>
 
+      {/* Processing Status */}
+      {currentChatId && uploadedDocs.length > 0 && (
+        <div className="mb-6">
+          <ProcessingStatus
+            chatId={currentChatId}
+            documents={uploadedDocs.map(doc => ({
+              id: doc.documentId,
+              name: doc.filename,
+              processing_status: 'processing'
+            }))}
+          />
+        </div>
+      )}
+
+      {/* Drop Zone */}
       <div
-        className={`w-full relative rounded-lg ${
-          isDragging
-            ? 'bg-gray-50 border-2 border-dashed border-blue-500'
-            : 'bg-white border-2 border-dashed border-gray-300'
-        } transition-colors duration-200 ease-in-out`}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragEnter}
-        onDragLeave={handleDragLeave}
+        onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
+        className="w-full relative rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-500 transition-colors"
       >
         <input
           type="file"
           accept=".pdf"
-          onChange={handleFileChange}
+          onChange={handleFileSelect}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
         />
         <div className="flex flex-col items-center justify-center py-16">
           <Upload className="w-12 h-12 text-gray-400 mb-4" />
-          <p className="text-lg text-gray-900 mb-1">Drag & drop your PDF here</p>
+          <p className="text-lg text-gray-900 mb-1">Drag & drop your PDFs here</p>
           <p className="text-sm text-gray-500">or click to browse</p>
         </div>
       </div>
 
+      {/* File List */}
       {files.length > 0 && (
         <div className="mt-6 space-y-3">
           {files.map((file) => (
@@ -348,34 +180,17 @@ const UploadPDF = () => {
             </div>
           ))}
 
-          {loading && progress.fileName && (
-            <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-blue-700">Processing: {progress.fileName}</span>
-                <span className="text-sm text-blue-700">
-                  {progress.current} of {progress.total}
-                </span>
-              </div>
-              <div className="w-full bg-blue-200 rounded-full h-2">
-                <div
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-
+          {/* Upload Button */}
           <button
             onClick={handleUpload}
             disabled={loading}
-            className={`w-full mt-4 px-6 py-3 rounded-lg text-white font-medium transition-colors ${
-              loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'
-            }`}
+            className={`w-full mt-4 px-6 py-3 rounded-lg text-white font-medium transition-colors
+              ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}
           >
             {loading ? (
               <div className="flex items-center justify-center space-x-2">
-                <Loader className="w-5 h-5 animate-spin" />
-                <span>Processing...</span>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Uploading...</span>
               </div>
             ) : (
               `Upload ${files.length} PDF${files.length > 1 ? 's' : ''}`
